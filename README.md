@@ -13,13 +13,11 @@ on native dsh seams (no dsh source changes):
 
 ## Install
 
-Build the package first:
+`lib/` is generated locally and is not committed. `install.py` builds the
+repository's own toolchain first (`npm install` + `npm run build`) and only
+reports an error when npm itself is missing.
 
-```sh
-npm run build
-```
-
-Then install/uninstall idempotently with the bundled script (stdlib-only
+Install/uninstall idempotently with the bundled script (stdlib-only
 Python). The package ships its own `cordis.patch.yml` (id
 `structured-output`) and declares `dsh.bundle.patch`, so the script only links
 the package into the profile `node_modules`, adds the `link:` dependency, and
