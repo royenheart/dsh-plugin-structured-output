@@ -17,12 +17,18 @@
   "files": [
     "lib",
     "src",
-    "README.md"
+    "README.md",
+    "cordis.patch.yml"
   ],
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test tests/*.spec.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

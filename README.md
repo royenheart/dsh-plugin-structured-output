@@ -13,18 +13,33 @@ on native dsh seams (no dsh source changes):
 
 ## Install
 
+Build the package first:
+
+```sh
+npm run build
+```
+
+Then install/uninstall idempotently with the bundled script (stdlib-only
+Python). The package ships its own `cordis.patch.yml` (id
+`structured-output`) and declares `dsh.bundle.patch`, so the script only links
+the package into the profile `node_modules`, adds the `link:` dependency, and
+appends the package to `dsh.profile.bundles`. The profile's own
+`cordis.patch.yml` is never modified:
+
+```sh
+python3 install.py install --profile web          # install
+python3 install.py uninstall --profile web        # remove
+python3 install.py install --profile web --home "$DSH_HOME"   # explicit home
+```
+
+Manual alternative:
+
 ```sh
 dsh plugin --profile web add link:/path/to/dsh-plugin-structured-output
 ```
 
-then add `@royenheart/dsh-plugin-structured-output` to the profile
-composition (e.g. `cordis.patch.yml`):
-
-```yaml
-- insert:
-    - id: structured-output
-      name: '@royenheart/dsh-plugin-structured-output'
-```
+`dsh plugin` reconciles `dsh.profile.bundles` from the installed package's
+`dsh.bundle` declaration, so no profile patch edit is needed either.
 
 ## Usage
 

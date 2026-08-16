@@ -1,0 +1,6 @@
+# Bundle patch for @royenheart/dsh-plugin-structured-output.
+# The package's own host row: the /json-schema command and the generic
+# StructuredOutput tool.
+- insert:
+    - id: structured-output
+      name: '@royenheart/dsh-plugin-structured-output'
