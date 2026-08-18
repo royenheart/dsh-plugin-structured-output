@@ -3,9 +3,10 @@
 opencode-style `json_schema` structured output for dsh agents, built entirely
 on native dsh seams (no dsh source changes):
 
-- `/json-schema <json>` stores an object-rooted JSON Schema for the current
-  session;
-- a generic `StructuredOutput` tool is registered for every composed agent;
+- visibility is per agent preset (mode) and is **opt-in**: Settings →
+  结构化输出工具 / Structured output chooses which modes expose it;
+- in enabled modes, `/json-schema <json>` stores an object-rooted JSON Schema
+  for the receiving session and the `StructuredOutput` tool is registered;
 - the next prompt receives opencode's instruction to return the final answer
   through `StructuredOutput` instead of plain text;
 - the tool validates the output with the native dsh JSON Schema subset
@@ -39,6 +40,13 @@ dsh plugin --profile web add link:/path/to/dsh-plugin-structured-output
 
 `dsh plugin` reconciles `dsh.profile.bundles` from the installed package's
 `dsh.bundle` declaration, so no profile patch edit is needed either.
+
+## Per-mode visibility
+
+No mode is enabled by default. After installing, open **Settings →
+结构化输出工具 (Structured output)** and toggle the agent presets that should
+see `StructuredOutput` and `/json-schema`. Disabled modes see neither surface;
+the choice applies to sessions created after the change.
 
 ## Usage
 

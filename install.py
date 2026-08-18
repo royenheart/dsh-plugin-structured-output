@@ -86,7 +86,7 @@ def ensure_link(link: Path, target: Path) -> None:
 
 
 def ensure_built(root: Path) -> None:
-    """Build the repository's own host bundle before installing.
+    """Build the repository's own host/client bundles before installing.
 
     `lib/` is generated locally and never versioned, so `install.py` always
     runs the package's own build instead of trusting whatever files happen to
@@ -103,14 +103,14 @@ def ensure_built(root: Path) -> None:
         if not (root / "node_modules" / ".bin" / "tsdown").exists():
             print("installing the repository's own toolchain (npm install)...")
             subprocess.run([npm, "install"], cwd=root, check=True)
-        print("building host bundle (npm run build)...")
+        print("building host/client bundles (npm run build)...")
         subprocess.run([npm, "run", "build"], cwd=root, check=True)
     except subprocess.CalledProcessError as error:
         raise SystemExit(
             "build failed (npm exit " + str(error.returncode) + ") - "
             "run `npm install` and `npm run build` inside " + str(root) + " to see the diagnostics"
         ) from error
-    required = [root / "lib" / "index.js"]
+    required = [root / "lib" / "index.js", root / "lib" / "client.js"]
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise SystemExit(
