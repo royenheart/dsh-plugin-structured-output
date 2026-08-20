@@ -16,9 +16,10 @@ export interface StructuredOutputSettingsSnapshot {
   readonly writable: boolean
 }
 
-/** Minimal face of the bound settings scope (the ui-settings package owns the concrete type). */
+/** Minimal face of the bound settings scope (the ui-settings package owns the concrete type).
+ * Matches the current dsh `SettingsScope<T>` contract: the scope self-loads
+ * when bound, so there is no `load()` method to call. */
 export interface StructuredOutputScope {
-  load(): Promise<void>
   getSnapshot(): StructuredOutputSettingsSnapshot
   subscribe(listener: () => void): () => void
   set(field: string, value: unknown): Promise<void>
@@ -98,10 +99,6 @@ export function StructuredOutputSettings({
 
   const [presets, setPresets] = useState<readonly StructuredOutputPreset[]>([])
   const [presetState, setPresetState] = useState<'loading' | 'ready' | 'error'>('loading')
-
-  useEffect(() => {
-    void scope?.load()
-  }, [scope])
 
   useEffect(() => {
     if (loadPresets === undefined) return
