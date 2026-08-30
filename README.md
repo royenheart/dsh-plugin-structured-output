@@ -1,5 +1,7 @@
 # @royenheart/dsh-plugin-structured-output
 
+[![dsh](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Froyenheart%2Fdsh-plugin-structured-output%2Frefs%2Fheads%2Fdsh-migrate%2Fstate%2Fbadge.json)](https://github.com/royenheart/dsh-plugin-structured-output/tree/dsh-migrate/state)
+
 opencode-style `json_schema` structured output for dsh agents, built entirely
 on native dsh seams (no dsh source changes):
 
