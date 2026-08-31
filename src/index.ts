@@ -19,7 +19,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -33,7 +32,7 @@ export const name = 'structured-output'
 export const inject = ['settings', 'tools', 'commands']
 
 /** Settings namespace (lowercase kebab-case; exposed to the Web settings surface). */
-export const SETTINGS_NAMESPACE = settingsNamespace('structured-output')
+export const SETTINGS_NAMESPACE = 'structured-output'
 
 /** Fallback mode id when a session carries no explicit agent preset. */
 export const DEFAULT_PRESET_ID = 'standard'

@@ -13,7 +13,6 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the settings.section SlotMap declaration.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-general/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { StructuredOutputSettings } from './StructuredOutputSettings.tsx'
 import type {
   StructuredOutputPreset,
@@ -40,14 +39,22 @@ export type {
 /** Cordis plugin name. */
 export const name = 'structured-output-client'
 
-/** Required services: slot registry + locale + settings transport + settings scope. */
-export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope']
+/** Required services: slot registry + locale + settings + the 0.1.2 preset remote. */
+export const inject = ['slots', 'locale', 'remote', 'remote.agentPresets', 'settingsScope']
 
 /** Dictionary namespace owned by this settings section. */
 const NS = 'structured-output'
 
+/** RemoteResult face used by `ctx.remote.agentPresets` (no `.result` wrapper). */
+type RemoteResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { code: string; message: string } }
+
+type AgentPresetsRemote = {
+  list(): Promise<RemoteResult<{ presets: readonly StructuredOutputPreset[] }>>
+}
+
 export function apply(ctx: Context): void {
-  const connection = ctx.get('connection') as ConnectionHandle
   // The locale runtime is provided by dsh-client-locale; read it through the
   // service registry so this package typechecks against both published and
   // workspace copies of the harness (the Context merge resolves differently).
@@ -56,13 +63,17 @@ export function apply(ctx: Context): void {
     bind(ns: string): (key: StructuredOutputLocaleKey, vars?: { name: string }) => string
   }
   const scope = ctx.settingsScope.bind<StructuredOutputSettingsValue>({ namespace: NS })
+  const agentPresets = ctx.get('remote.agentPresets') as AgentPresetsRemote
 
   const loadPresets = async (): Promise<readonly StructuredOutputPreset[]> => {
-    const response = await connection.api.agentPresets.list({})
-    if (!response.result.ok) {
-      throw new Error(`${response.result.error.code}: ${response.result.error.message}`)
+    const response = await agentPresets.list()
+    if (!response.ok) {
+      // Same empty-roster fallback first-party ui-agent-preset uses when the
+      // Host composition has no agent-presets service.
+      if (response.error.code === 'gateway/invocation-unavailable') return []
+      throw new Error(`${response.error.code}: ${response.error.message}`)
     }
-    return response.result.value.presets
+    return response.value.presets
   }
 
   ctx.effect(() => {

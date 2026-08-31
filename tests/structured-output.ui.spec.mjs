@@ -178,20 +178,18 @@ class MockLocale extends Service {
   }
 }
 
-class MockConnection extends Service {
-  constructor(ctx) {
-    super(ctx, 'connection')
-    this.api = {
-      agentPresets: {
-        list: async () => ({ result: { ok: true, value: { presets: [{ id: 'standard', isDefault: true }] } } }),
-      },
-    }
-  }
-}
-
 class MockRemote extends Service {
   constructor(ctx) {
     super(ctx, 'remote')
+  }
+}
+
+class MockAgentPresetsRemote extends Service {
+  constructor(ctx) {
+    super(ctx, 'remote.agentPresets')
+  }
+  async list() {
+    return { ok: true, value: { presets: [{ id: 'standard', isDefault: true }] } }
   }
 }
 
@@ -210,8 +208,8 @@ test('client apply registers the 结构化输出工具 settings section', async 
   const ctx = new Context()
   await ctx.plugin(MockSlots)
   await ctx.plugin(MockLocale)
-  await ctx.plugin(MockConnection)
   await ctx.plugin(MockRemote)
+  await ctx.plugin(MockAgentPresetsRemote)
   await ctx.plugin(MockSettingsScope)
   const client = await import('../src/client/index.ts')
   await ctx.plugin(client)
@@ -222,6 +220,10 @@ test('client apply registers the 结构化输出工具 settings section', async 
   assert.equal(registration.options.order, 45)
   assert.equal(registration.options.label(), '结构化输出工具')
   assert.equal(registration.Component, StructuredOutputSettings)
+  assert.deepEqual(
+    await registration.options.inject().loadPresets(),
+    [{ id: 'standard', isDefault: true }],
+  )
 
   const locale = ctx.get('locale').namespaces[0]
   assert.equal(locale.ns, 'structured-output')
