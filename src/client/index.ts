@@ -6,8 +6,10 @@
  * persisted section lives in the host `structured-output` settings namespace.
  */
 import type { Context } from '@deepseek-ai/cordis'
-// Type-only: resolves the slots service merge + standard slot kit.
-import type {} from '@deepseek-ai/dsh-client-runtime/client'
+// Type-only: resolves the ctx.slots registry installed by the UI renderer.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+// Type-only: resolves the ctx.remote merge and mounted remote namespaces.
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: resolves ctx.locale.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the settings.section SlotMap declaration.
@@ -59,7 +61,7 @@ export function apply(ctx: Context): void {
   // service registry so this package typechecks against both published and
   // workspace copies of the harness (the Context merge resolves differently).
   const locale = ctx.get('locale') as unknown as {
-    register(ns: string, dictionaries: { zh: Record<string, string>; en: Record<string, string> }): void
+    register(ns: string, dictionaries: { zh: Record<string, string>; en: Record<string, string> }): () => void
     bind(ns: string): (key: StructuredOutputLocaleKey, vars?: { name: string }) => string
   }
   const scope = ctx.settingsScope.bind<StructuredOutputSettingsValue>({ namespace: NS })
@@ -76,10 +78,7 @@ export function apply(ctx: Context): void {
     return response.value.presets
   }
 
-  ctx.effect(() => {
-    locale.register(NS, { zh, en })
-    return () => {}
-  }, 'structured-output: settings dictionaries')
+  ctx.effect(() => locale.register(NS, { zh, en }), 'structured-output: settings dictionaries')
   const t = locale.bind(NS)
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({

@@ -17,6 +17,8 @@
  *   admitting it.
  */
 import type { Context } from '@deepseek-ai/cordis'
+// Type-only: resolves ctx.settings (dsh-settings owns the Context merge).
+import type {} from '@deepseek-ai/dsh-settings'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
@@ -31,7 +33,7 @@ export type { JsonSchemaNode }
 export const name = 'structured-output'
 export const inject = ['settings', 'tools', 'commands']
 
-/** Settings namespace (lowercase kebab-case; exposed to the Web settings surface). */
+/** Settings namespace (lowercase kebab-case; shown by the Web settings section). */
 export const SETTINGS_NAMESPACE = 'structured-output'
 
 /** Fallback mode id when a session carries no explicit agent preset. */
@@ -86,8 +88,7 @@ export function apply(ctx: Context): void {
   const settings = ctx.settings.register(
     SETTINGS_NAMESPACE,
     SettingsSchema,
-    // The published rc typings predate `expose`; the running seam honors it.
-    { applies: 'live', expose: 'web' } as never,
+    { applies: 'live' },
   )
 
   const tool = defineTool({
