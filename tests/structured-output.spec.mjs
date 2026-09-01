@@ -111,10 +111,10 @@ function commandNamed(agent, name) {
   return agent.ctx.get('commands').definitions.find(definition => definition.name === name)
 }
 
-test('apply registers the web-exposed settings namespace', async () => {
+test('apply registers the live settings namespace', async () => {
   const ctx = await bootHost()
   const registrations = ctx.get('settings').registrations
-  assert.ok(registrations.some(entry => entry.ns === SETTINGS_NAMESPACE && entry.options.expose === 'web'))
+  assert.ok(registrations.some(entry => entry.ns === SETTINGS_NAMESPACE && entry.options.applies === 'live'))
   await ctx.fiber.dispose()
 })
 

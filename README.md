@@ -59,7 +59,7 @@ What is the answer to life, the universe, and everything?
 
 The model must then call `StructuredOutput` with a valid object.
 
-Supported schemas follow dsh's enforced JSON Schema subset: any JSON root,
-object `properties`/`required`/boolean `additionalProperties`, array `items`,
-scalar `enum`/`const`, and exact-one `oneOf`. Unsupported keywords are
-rejected at `/json-schema` time.
+Supported schemas follow dsh's enforced JSON Schema subset with an object
+JSON root: object `properties`/`required`/boolean `additionalProperties`, array
+`items`, scalar `enum`/`const`, and exact-one `oneOf`. Unsupported keywords
+are rejected at `/json-schema` time.
