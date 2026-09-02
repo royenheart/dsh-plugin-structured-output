@@ -18,6 +18,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-general/client'
 import { StructuredOutputSettings } from './StructuredOutputSettings.tsx'
 import type {
   StructuredOutputPreset,
+  StructuredOutputRpc,
   StructuredOutputScope,
   StructuredOutputSettingsInjected,
   StructuredOutputSettingsProps,
@@ -32,6 +33,7 @@ import type {} from './slots.ts'
 export { StructuredOutputSettings } from './StructuredOutputSettings.tsx'
 export type {
   StructuredOutputPreset,
+  StructuredOutputRpc,
   StructuredOutputScope,
   StructuredOutputSettingsInjected,
   StructuredOutputSettingsProps,
@@ -41,8 +43,8 @@ export type {
 /** Cordis plugin name. */
 export const name = 'structured-output-client'
 
-/** Required services: slot registry + locale + settings + the 0.1.2 preset remote. */
-export const inject = ['slots', 'locale', 'remote', 'remote.agentPresets', 'settingsScope']
+/** Required services: slot registry + locale + settings + connection RPC + the 0.1.2 preset remote. */
+export const inject = ['slots', 'locale', 'remote', 'remote.agentPresets', 'settingsScope', 'connection']
 
 /** Dictionary namespace owned by this settings section. */
 const NS = 'structured-output'
@@ -66,6 +68,10 @@ export function apply(ctx: Context): void {
   }
   const scope = ctx.settingsScope.bind<StructuredOutputSettingsValue>({ namespace: NS })
   const agentPresets = ctx.get('remote.agentPresets') as AgentPresetsRemote
+  const connection = ctx.get('connection') as unknown as {
+    rpc?: StructuredOutputRpc
+  } | undefined
+  const rpc = connection?.rpc
 
   const loadPresets = async (): Promise<readonly StructuredOutputPreset[]> => {
     const response = await agentPresets.list()
@@ -90,6 +96,7 @@ export function apply(ctx: Context): void {
     inject: (): StructuredOutputSettingsInjected => ({
       scope: scope as unknown as StructuredOutputScope,
       loadPresets,
+      rpc,
     }),
   }, StructuredOutputSettings as unknown as (props: StructuredOutputSettingsProps) => ReturnType<typeof StructuredOutputSettings>))
 }

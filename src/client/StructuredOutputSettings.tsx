@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { StructuredOutputLocaleKey } from './locales.ts'
+import { SO_RPC_CHANNEL, SO_RPC_ENDPOINTS } from '../core/rpc.ts'
 
 export interface StructuredOutputSettingsValue {
   presets: Record<string, boolean>
@@ -37,6 +38,15 @@ export interface StructuredOutputPreset {
 export interface StructuredOutputSettingsInjected {
   readonly scope: StructuredOutputScope
   readonly loadPresets: () => Promise<readonly StructuredOutputPreset[]>
+  readonly rpc?: StructuredOutputRpc
+}
+
+export interface StructuredOutputRpc {
+  call(channel: string, endpoint: string, payload: unknown): Promise<{
+    readonly ok: boolean
+    readonly value?: unknown
+    readonly error?: { readonly message?: string }
+  }>
 }
 
 export type StructuredOutputSettingsProps = Partial<StructuredOutputSettingsInjected> & {
@@ -88,7 +98,7 @@ function translate(
 
 /** Render one settings section listing per-preset visibility toggles. */
 export function StructuredOutputSettings({
-  scope, loadPresets, close, t,
+  scope, loadPresets, rpc, close, t,
 }: StructuredOutputSettingsProps): ReactElement | null {
   void close
 
@@ -96,6 +106,29 @@ export function StructuredOutputSettings({
     (listener: () => void) => scope?.subscribe(listener) ?? (() => {}),
     () => scope?.getSnapshot() ?? UNAVAILABLE_SNAPSHOT,
   )
+
+  const [rpcValue, setRpcValue] = useState<StructuredOutputSettingsValue | undefined>(undefined)
+  const [rpcStatus, setRpcStatus] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
+
+  useEffect(() => {
+    if (rpc === undefined || snapshot.status !== 'unavailable') return
+    let stale = false
+    setRpcStatus('loading')
+    rpc.call(SO_RPC_CHANNEL, SO_RPC_ENDPOINTS.settingsGet, {})
+      .then((result) => {
+        if (stale) return
+        if (result.ok && result.value !== undefined) {
+          setRpcValue(result.value as StructuredOutputSettingsValue)
+          setRpcStatus('ready')
+        } else {
+          setRpcStatus('failed')
+        }
+      })
+      .catch(() => {
+        if (!stale) setRpcStatus('failed')
+      })
+    return () => { stale = true }
+  }, [rpc, snapshot.status])
 
   const [presets, setPresets] = useState<readonly StructuredOutputPreset[]>([])
   const [presetState, setPresetState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -117,19 +150,47 @@ export function StructuredOutputSettings({
     return () => { stale = true }
   }, [loadPresets])
 
-  const enabled = useMemo(() => snapshot.value?.presets ?? {}, [snapshot.value])
+  // On loopback the bound settings scope is authoritative. In a non-loopback
+  // browser it reports 'unavailable', so the authenticated RPC channel becomes
+  // the effective settings snapshot.
+  const settingsSnapshot = useMemo<StructuredOutputSettingsSnapshot>(() => {
+    if (snapshot.status === 'ready') return snapshot
+    if (snapshot.status === 'unavailable' && rpcStatus === 'ready' && rpcValue !== undefined) {
+      return { status: 'ready', value: rpcValue, writable: true }
+    }
+    if (snapshot.status === 'unavailable' && rpcStatus === 'loading') {
+      return { status: 'loading', writable: false }
+    }
+    return snapshot
+  }, [snapshot, rpcStatus, rpcValue])
+
+  const enabled = useMemo(() => settingsSnapshot.value?.presets ?? {}, [settingsSnapshot.value])
 
   if (scope === undefined || loadPresets === undefined) return null
 
   const setVisible = (presetId: string, visible: boolean): void => {
-    void scope.set('presets', { ...enabled, [presetId]: visible })
+    const next = { ...enabled, [presetId]: visible }
+    if (snapshot.status === 'ready') {
+      void scope.set('presets', next)
+      return
+    }
+    if (rpcStatus === 'ready' && rpc !== undefined) {
+      rpc.call(SO_RPC_CHANNEL, SO_RPC_ENDPOINTS.settingsSet, { presets: next })
+        .then((result) => {
+          if (result.ok && result.value !== undefined) {
+            setRpcValue(result.value as StructuredOutputSettingsValue)
+            setRpcStatus('ready')
+          }
+        })
+        .catch(() => {})
+    }
   }
 
   return (
     <div style={STYLE.root}>
       <div style={STYLE.hint}>{translate(t, 'intro')}</div>
-      {snapshot.status === 'loading' && <div style={STYLE.status}>{translate(t, 'loading')}</div>}
-      {snapshot.status === 'unavailable' && <div style={STYLE.error}>{translate(t, 'unavailable')}</div>}
+      {settingsSnapshot.status === 'loading' && <div style={STYLE.status}>{translate(t, 'loading')}</div>}
+      {settingsSnapshot.status === 'unavailable' && <div style={STYLE.error}>{translate(t, 'unavailable')}</div>}
       {presetState === 'loading' && <div style={STYLE.status}>{translate(t, 'presetsLoading')}</div>}
       {presetState === 'error' && <div style={STYLE.error}>{translate(t, 'presetsError')}</div>}
       {presetState === 'ready' && (
@@ -148,7 +209,7 @@ export function StructuredOutputSettings({
                 type="checkbox"
                 style={STYLE.toggle}
                 aria-label={translate(t, 'enable', { name: preset.name ?? preset.id })}
-                disabled={preset.broken !== undefined || snapshot.status !== 'ready'}
+                disabled={preset.broken !== undefined || settingsSnapshot.status !== 'ready'}
                 checked={enabled[preset.id] === true}
                 onChange={(event) => { setVisible(preset.id, event.currentTarget.checked) }}
               />

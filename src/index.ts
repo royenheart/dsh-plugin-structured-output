@@ -21,14 +21,24 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent'
+// Type-only: pulls `ctx.settings` into the Context merge for this program.
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import { parseAndValidateSchema, validateOutput } from './core/schema.ts'
+import {
+  parseSoSettingsSetRequest,
+  SO_RPC_CHANNEL,
+  SO_RPC_ENDPOINTS,
+  type SoRpcResult,
+} from './core/rpc.ts'
 
 export { parseAndValidateSchema, validateOutput } from './core/schema.ts'
 export type { JsonSchemaNode }
+export { SO_RPC_CHANNEL, SO_RPC_ENDPOINTS } from './core/rpc.ts'
+export type { SoRpcResult } from './core/rpc.ts'
 
 export const name = 'structured-output'
 export const inject = ['settings', 'tools', 'commands']
@@ -76,6 +86,58 @@ interface CommandsFace {
   }): () => void
 }
 
+/** Host settings scope face consumed by the RPC fallback. */
+interface SettingsScopeFace {
+  get(): StructuredOutputSettings
+  update(patch: object): Promise<void>
+}
+
+interface ConnectionRpcFace {
+  rpc?: {
+    handle(channel: string, handler: (endpoint: string, payload: unknown) => Promise<SoRpcResult>): () => void
+  }
+}
+
+function badRequest(message: string): SoRpcResult {
+  return {
+    ok: false,
+    error: {
+      code: 'structured-output/bad-request',
+      message,
+      details: {},
+    },
+  }
+}
+
+/** Dispatch one `/structured-output` RPC endpoint. */
+async function handleStructuredOutputRpc(
+  settings: SettingsScopeFace,
+  endpoint: string,
+  payload: unknown,
+): Promise<SoRpcResult> {
+  if (endpoint === SO_RPC_ENDPOINTS.settingsGet) {
+    return { ok: true, value: settings.get() }
+  }
+  if (endpoint === SO_RPC_ENDPOINTS.settingsSet) {
+    const request = parseSoSettingsSetRequest(payload)
+    if (request === undefined) return badRequest('invalid settings/set payload')
+    try {
+      await settings.update({ presets: request.presets })
+      return { ok: true, value: settings.get() }
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : String(error))
+    }
+  }
+  return {
+    ok: false,
+    error: {
+      code: 'structured-output/bad-endpoint',
+      message: `unknown endpoint ${endpoint}`,
+      details: {},
+    },
+  }
+}
+
 /**
  * Mount the per-preset tool/command surfaces, the settings namespace, and the
  * per-session instruction injection.
@@ -86,7 +148,7 @@ export function apply(ctx: Context): void {
   const outputs = new Map<string, unknown>()
 
   const settings = ctx.settings.register(
-    SETTINGS_NAMESPACE,
+    SETTINGS_NAMESPACE as SettingsNamespace,
     SettingsSchema,
     { applies: 'live' },
   )
@@ -169,6 +231,20 @@ export function apply(ctx: Context): void {
     })
     return { kind: 'enter', messages: [...decision.messages, instruction] }
   }), 'structured-output: /json-schema instruction')
+
+  // Remote-browser settings fallback. The channel is registered only after the
+  // connection host service is active; headless compositions without
+  // connection never run this callback.
+  ctx.inject(['connection'], (connCtx) => {
+    const connection = connCtx.get('connection') as ConnectionRpcFace | undefined
+    connCtx.effect(() => {
+      if (connection?.rpc === undefined) return () => {}
+      const disposeRpc = connection.rpc.handle(SO_RPC_CHANNEL, (endpoint, payload) => {
+        return handleStructuredOutputRpc(settings as unknown as SettingsScopeFace, endpoint, payload)
+      })
+      return () => { disposeRpc() }
+    }, 'structured-output: authenticated settings rpc')
+  })
 
   // The maps stay process-local; consumers/tests exercise the command and
   // tool through their registries.

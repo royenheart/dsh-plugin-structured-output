@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { agentEvents } from '@deepseek-ai/dsh-agent'
 import { parseAndValidateSchema, validateOutput } from '../src/core/schema.ts'
-import { enabledForPreset, SETTINGS_NAMESPACE } from '../src/index.ts'
+import { enabledForPreset, SETTINGS_NAMESPACE, SO_RPC_CHANNEL, SO_RPC_ENDPOINTS } from '../src/index.ts'
 
 const OBJECT_SCHEMA = JSON.stringify({
   type: 'object',
@@ -51,6 +51,27 @@ class MockSettings extends Service {
     return {
       get: () => this.value,
       watch: () => () => {},
+      update: async (patch) => { this.value = { ...this.value, ...patch } },
+    }
+  }
+}
+
+class MockConnection extends Service {
+  constructor(ctx) {
+    super(ctx, 'connection')
+    this.channel = undefined
+    this.handler = undefined
+  }
+  get rpc() {
+    return {
+      handle: (channel, handler) => {
+        this.channel = channel
+        this.handler = handler
+        return () => {
+          this.channel = undefined
+          this.handler = undefined
+        }
+      },
     }
   }
 }
@@ -79,12 +100,14 @@ class MockCommands extends Service {
 
 const toolsPlugin = { name: 'mock-tools', inject: [], apply: (ctx) => { ctx.plugin(MockTools) } }
 const commandsPlugin = { name: 'mock-commands', inject: [], apply: (ctx) => { ctx.plugin(MockCommands) } }
+const connectionPlugin = { name: 'mock-connection', inject: [], apply: (ctx) => { ctx.plugin(MockConnection) } }
 
 async function bootHost(settingsValue = { presets: {} }) {
   const ctx = new Context()
   await ctx.plugin(MockSettings)
   await ctx.plugin(toolsPlugin)
   await ctx.plugin(commandsPlugin)
+  await ctx.plugin(connectionPlugin)
   ctx.get('settings').value = settingsValue
   const plugin = await import('../src/index.ts')
   await ctx.plugin(plugin)
@@ -115,6 +138,32 @@ test('apply registers the live settings namespace', async () => {
   const ctx = await bootHost()
   const registrations = ctx.get('settings').registrations
   assert.ok(registrations.some(entry => entry.ns === SETTINGS_NAMESPACE && entry.options.applies === 'live'))
+  await ctx.fiber.dispose()
+})
+
+test('registers the authenticated RPC channel and serves settings through it', async () => {
+  const ctx = await bootHost({ presets: { standard: true } })
+  const connection = ctx.get('connection')
+  assert.equal(connection.channel, SO_RPC_CHANNEL)
+  assert.equal(typeof connection.handler, 'function')
+
+  const get = await connection.handler(SO_RPC_ENDPOINTS.settingsGet, {})
+  assert.equal(get.ok, true)
+  assert.deepEqual(get.value, { presets: { standard: true } })
+
+  const set = await connection.handler(SO_RPC_ENDPOINTS.settingsSet, { presets: { standard: true, code: false } })
+  assert.equal(set.ok, true)
+  assert.deepEqual(set.value, { presets: { standard: true, code: false } })
+  assert.deepEqual(ctx.get('settings').value, { presets: { standard: true, code: false } })
+  await ctx.fiber.dispose()
+})
+
+test('rejects malformed settings/set payloads', async () => {
+  const ctx = await bootHost()
+  const connection = ctx.get('connection')
+  const bad = await connection.handler(SO_RPC_ENDPOINTS.settingsSet, { presets: { standard: 'yes' } })
+  assert.equal(bad.ok, false)
+  assert.equal(bad.error.code, 'structured-output/bad-request')
   await ctx.fiber.dispose()
 })
 

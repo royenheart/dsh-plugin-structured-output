@@ -5,6 +5,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {
   StructuredOutputPreset,
+  StructuredOutputRpc,
   StructuredOutputScope,
   StructuredOutputSettingsInjected,
   StructuredOutputSettingsProps,
@@ -12,11 +13,12 @@ import type {
 } from './StructuredOutputSettings.tsx'
 
 export declare const name: 'structured-output-client'
-export declare const inject: ['slots', 'locale', 'remote', 'remote.agentPresets', 'settingsScope']
+export declare const inject: ['slots', 'locale', 'remote', 'remote.agentPresets', 'settingsScope', 'connection']
 export declare function apply(ctx: Context): void
 export { StructuredOutputSettings } from './StructuredOutputSettings.tsx'
 export type {
   StructuredOutputPreset,
+  StructuredOutputRpc,
   StructuredOutputScope,
   StructuredOutputSettingsInjected,
   StructuredOutputSettingsProps,

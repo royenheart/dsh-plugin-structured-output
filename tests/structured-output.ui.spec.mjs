@@ -204,6 +204,13 @@ class MockSettingsScope extends Service {
   }
 }
 
+class MockConnection extends Service {
+  constructor(ctx) {
+    super(ctx, 'connection')
+    this.rpc = { call: async () => ({ ok: true, value: { presets: {} } }) }
+  }
+}
+
 test('client apply registers the 结构化输出工具 settings section', async () => {
   const ctx = new Context()
   await ctx.plugin(MockSlots)
@@ -211,6 +218,7 @@ test('client apply registers the 结构化输出工具 settings section', async 
   await ctx.plugin(MockRemote)
   await ctx.plugin(MockAgentPresetsRemote)
   await ctx.plugin(MockSettingsScope)
+  await ctx.plugin(MockConnection)
   const client = await import('../src/client/index.ts')
   await ctx.plugin(client)
 
@@ -230,6 +238,48 @@ test('client apply registers the 结构化输出工具 settings section', async 
   assert.equal(locale.dictionaries.zh.nav, '结构化输出工具')
   assert.equal(ctx.get('settingsScope').bound[0].namespace, 'structured-output')
   await ctx.fiber.dispose()
+})
+
+test('remote fallback reads and writes through the authenticated RPC channel', async () => {
+  const calls = []
+  const rpc = {
+    call: async (channel, endpoint, payload) => {
+      calls.push({ channel, endpoint, payload })
+      if (endpoint === 'settings/get') {
+        return { ok: true, value: { presets: { standard: true } } }
+      }
+      if (endpoint === 'settings/set') {
+        return { ok: true, value: { presets: payload.presets } }
+      }
+      return { ok: false, error: { message: 'bad endpoint' } }
+    },
+  }
+
+  const view = await mount({
+    scope: fakeScope({ status: 'unavailable', writable: false }),
+    loadPresets: async () => [
+      { id: 'standard', isDefault: true, name: 'Standard' },
+      { id: 'code', isDefault: false, name: 'Code' },
+    ],
+    rpc,
+    t,
+  })
+  await act(async () => { await Promise.resolve() })
+
+  // The fallback read replaced the unavailable message with the loaded value.
+  assert.doesNotMatch(hostText(view.host), /无法读取结构化输出设置/)
+  assert.match(hostText(view.host), /Standard/)
+
+  const boxes = [...view.host.querySelectorAll('input[type="checkbox"]')]
+  assert.equal(boxes[0].checked, true)
+  assert.equal(boxes[0].disabled, false)
+
+  await act(async () => { boxes[1].click() })
+  assert.ok(calls.some(call => call.channel === '/structured-output' && call.endpoint === 'settings/set'))
+  const setCall = calls.find(call => call.endpoint === 'settings/set')
+  assert.equal(setCall.payload.presets.code, true)
+  assert.equal(setCall.payload.presets.standard, true)
+  await view.unmount()
 })
 
 function hostText(host) {
