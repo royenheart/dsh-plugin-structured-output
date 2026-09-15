@@ -4,6 +4,12 @@
  * Registers the `structured-output` section in dsh Settings, where each agent
  * preset's visibility of StructuredOutput + /json-schema is toggled. The
  * persisted section lives in the host `structured-output` settings namespace.
+ *
+ * The section's reactive state crosses the slot contract through the reserved
+ * inject `hooks` compartment (the renderer binds it to a
+ * `useStructuredOutputSettings` selector hook); every read/write route — the
+ * bound settings scope on loopback, the authenticated `/structured-output`
+ * channel elsewhere — is decided here in `apply`, not in the component.
  */
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: resolves the ctx.slots registry installed by the UI renderer.
@@ -21,7 +27,6 @@ import type {
   StructuredOutputRpc,
   StructuredOutputScope,
   StructuredOutputSettingsInjected,
-  StructuredOutputSettingsProps,
   StructuredOutputSettingsValue,
 } from './StructuredOutputSettings.tsx'
 import { en, zh } from './locales.ts'
@@ -29,6 +34,7 @@ import type { StructuredOutputLocaleKey } from './locales.ts'
 // Local SlotMap declarations keep this package typechecking against pnpm's
 // separately-resolved ui-settings copies (see slots.ts).
 import type {} from './slots.ts'
+import { SO_RPC_CHANNEL, SO_RPC_ENDPOINTS } from '../core/rpc.ts'
 
 export { StructuredOutputSettings } from './StructuredOutputSettings.tsx'
 export type {
@@ -37,13 +43,15 @@ export type {
   StructuredOutputScope,
   StructuredOutputSettingsInjected,
   StructuredOutputSettingsProps,
+  StructuredOutputSettingsSnapshot,
+  StructuredOutputSettingsHook,
   StructuredOutputSettingsValue,
 } from './StructuredOutputSettings.tsx'
 
 /** Cordis plugin name. */
 export const name = 'structured-output-client'
 
-/** Required services: slot registry + locale + settings + connection RPC + the 0.1.2 preset remote. */
+/** Required services: slot registry + locale + settings + connection RPC + the preset remote. */
 export const inject = ['slots', 'locale', 'remote', 'remote.agentPresets', 'settingsScope', 'connection']
 
 /** Dictionary namespace owned by this settings section. */
@@ -59,13 +67,6 @@ type AgentPresetsRemote = {
 }
 
 export function apply(ctx: Context): void {
-  // The locale runtime is provided by dsh-client-locale; read it through the
-  // service registry so this package typechecks against both published and
-  // workspace copies of the harness (the Context merge resolves differently).
-  const locale = ctx.get('locale') as unknown as {
-    register(ns: string, dictionaries: { zh: Record<string, string>; en: Record<string, string> }): () => void
-    bind(ns: string): (key: StructuredOutputLocaleKey, vars?: { name: string }) => string
-  }
   const scope = ctx.settingsScope.bind<StructuredOutputSettingsValue>({ namespace: NS })
   const agentPresets = ctx.get('remote.agentPresets') as AgentPresetsRemote
   const connection = ctx.get('connection') as unknown as {
@@ -84,8 +85,32 @@ export function apply(ctx: Context): void {
     return response.value.presets
   }
 
-  ctx.effect(() => locale.register(NS, { zh, en }), 'structured-output: settings dictionaries')
-  const t = locale.bind(NS)
+  // The authenticated fallback route: read the namespace through the channel
+  // registered on the host half when the bound settings scope is memory-mode.
+  const readRemoteSettings = async (): Promise<StructuredOutputSettingsValue | undefined> => {
+    if (rpc === undefined) return undefined
+    const result = await rpc.call(SO_RPC_CHANNEL, SO_RPC_ENDPOINTS.settingsGet, {})
+    return result.ok && result.value !== undefined
+      ? result.value as StructuredOutputSettingsValue
+      : undefined
+  }
+
+  const setPresets = async (
+    presets: Record<string, boolean>,
+  ): Promise<StructuredOutputSettingsValue | undefined> => {
+    if (scope.getSnapshot().status === 'ready') {
+      await scope.set('presets', presets)
+      return undefined
+    }
+    if (rpc === undefined) return undefined
+    const result = await rpc.call(SO_RPC_CHANNEL, SO_RPC_ENDPOINTS.settingsSet, { presets })
+    return result.ok && result.value !== undefined
+      ? result.value as StructuredOutputSettingsValue
+      : undefined
+  }
+
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'structured-output: settings dictionaries')
+  const t = ctx.locale.bind(NS)
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -94,11 +119,12 @@ export function apply(ctx: Context): void {
     label: () => t('nav'),
     locale: NS,
     inject: (): StructuredOutputSettingsInjected => ({
-      scope: scope as unknown as StructuredOutputScope,
+      hooks: { structuredOutputSettings: scope as unknown as StructuredOutputScope },
       loadPresets,
-      rpc,
+      readRemoteSettings,
+      setPresets,
     }),
-  }, StructuredOutputSettings as unknown as (props: StructuredOutputSettingsProps) => ReturnType<typeof StructuredOutputSettings>))
+  }, StructuredOutputSettings))
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

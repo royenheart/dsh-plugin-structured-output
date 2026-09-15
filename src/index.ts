@@ -94,7 +94,10 @@ interface SettingsScopeFace {
 
 interface ConnectionRpcFace {
   rpc?: {
-    handle(channel: string, handler: (endpoint: string, payload: unknown) => Promise<SoRpcResult>): () => void
+    handle(
+      channel: string,
+      handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<SoRpcResult>,
+    ): () => void | Promise<void>
   }
 }
 
@@ -109,16 +112,33 @@ function badRequest(message: string): SoRpcResult {
   }
 }
 
+/** Answer a call whose caller cancelled before the write was admitted. */
+function cancelled(): SoRpcResult {
+  return {
+    ok: false,
+    error: {
+      code: 'structured-output/cancelled',
+      message: 'request cancelled before the settings write was admitted',
+      details: {},
+    },
+  }
+}
+
 /** Dispatch one `/structured-output` RPC endpoint. */
 async function handleStructuredOutputRpc(
   settings: SettingsScopeFace,
   endpoint: string,
   payload: unknown,
+  signal?: AbortSignal,
 ): Promise<SoRpcResult> {
   if (endpoint === SO_RPC_ENDPOINTS.settingsGet) {
     return { ok: true, value: settings.get() }
   }
   if (endpoint === SO_RPC_ENDPOINTS.settingsSet) {
+    // Honor the dsh 0.1.6 handler contract: an aborted caller must not mutate
+    // durable settings. A cancellation racing the queued write is bounded by
+    // the settings provider's own serialized queue.
+    if (signal?.aborted === true) return cancelled()
     const request = parseSoSettingsSetRequest(payload)
     if (request === undefined) return badRequest('invalid settings/set payload')
     try {
@@ -206,13 +226,16 @@ export function apply(ctx: Context): void {
   }
 
   ctx.effect(() => {
-    const dispose = ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
-      if (!enabledForPreset(settings.get(), agent.session.header.agentPreset)) return
+    const dispose = ctx.on('agent/created', ({ agent }: { agent: Agent }): undefined => {
       // Register into the agent's own scope: enabled modes see both surfaces,
       // disabled modes see neither, and disposal unwinds with the agent.
-      agent.ctx.tools.register(tool)
-      const commands = agent.ctx.get('commands') as CommandsFace
-      commands.register(command)
+      if (enabledForPreset(settings.get(), agent.session.header.agentPreset)) {
+        agent.ctx.tools.register(tool)
+        const commands = agent.ctx.get('commands') as CommandsFace
+        commands.register(command)
+      }
+      // dsh 0.1.6 declares this serial listener as returning `undefined`.
+      return undefined
     })
     return dispose
   }, 'structured-output: per-preset agent surface')
@@ -239,10 +262,16 @@ export function apply(ctx: Context): void {
     const connection = connCtx.get('connection') as ConnectionRpcFace | undefined
     connCtx.effect(() => {
       if (connection?.rpc === undefined) return () => {}
-      const disposeRpc = connection.rpc.handle(SO_RPC_CHANNEL, (endpoint, payload) => {
-        return handleStructuredOutputRpc(settings as unknown as SettingsScopeFace, endpoint, payload)
+      // dsh 0.1.6 returns an async disposer; hand it back unwrapped so the
+      // effect awaits route removal instead of dropping the promise.
+      return connection.rpc.handle(SO_RPC_CHANNEL, (endpoint, payload, signal) => {
+        return handleStructuredOutputRpc(
+          settings as unknown as SettingsScopeFace,
+          endpoint,
+          payload,
+          signal,
+        )
       })
-      return () => { disposeRpc() }
     }, 'structured-output: authenticated settings rpc')
   })
 

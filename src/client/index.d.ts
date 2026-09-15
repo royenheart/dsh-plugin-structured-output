@@ -7,8 +7,10 @@ import type {
   StructuredOutputPreset,
   StructuredOutputRpc,
   StructuredOutputScope,
+  StructuredOutputSettingsHook,
   StructuredOutputSettingsInjected,
   StructuredOutputSettingsProps,
+  StructuredOutputSettingsSnapshot,
   StructuredOutputSettingsValue,
 } from './StructuredOutputSettings.tsx'
 
@@ -20,7 +22,9 @@ export type {
   StructuredOutputPreset,
   StructuredOutputRpc,
   StructuredOutputScope,
+  StructuredOutputSettingsHook,
   StructuredOutputSettingsInjected,
   StructuredOutputSettingsProps,
+  StructuredOutputSettingsSnapshot,
   StructuredOutputSettingsValue,
 }

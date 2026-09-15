@@ -10,7 +10,9 @@
  * Authentication is inherited from `client-connection`: the physical route
  * runs every request through the same Host/Origin trust fence and dsh web
  * session cookie verification as the `/api` RPC. The plugin never registers a
- * bare `webServer` write route.
+ * bare `webServer` write route. On dsh 0.1.6 the handler also receives the
+ * request's `AbortSignal`; the host half refuses a `settings/set` that was
+ * already cancelled before the write was admitted.
  *
  * This module is pure (no dsh imports) so parsing/validation is unit-testable.
  */

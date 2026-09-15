@@ -155,6 +155,19 @@ test('registers the authenticated RPC channel and serves settings through it', a
   assert.equal(set.ok, true)
   assert.deepEqual(set.value, { presets: { standard: true, code: false } })
   assert.deepEqual(ctx.get('settings').value, { presets: { standard: true, code: false } })
+
+  // dsh 0.1.6 hands the handler the caller's cancellation signal; an aborted
+  // caller must not mutate durable settings.
+  const aborted = new AbortController()
+  aborted.abort()
+  const cancelled = await connection.handler(
+    SO_RPC_ENDPOINTS.settingsSet,
+    { presets: { standard: false } },
+    aborted.signal,
+  )
+  assert.equal(cancelled.ok, false)
+  assert.equal(cancelled.error.code, 'structured-output/cancelled')
+  assert.deepEqual(ctx.get('settings').value, { presets: { standard: true, code: false } })
   await ctx.fiber.dispose()
 })
 

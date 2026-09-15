@@ -1,11 +1,16 @@
 /**
  * StructuredOutputSettings — the global settings section controlling which
  * agent presets expose StructuredOutput and /json-schema.
+ *
+ * Reactive settings state arrives through the renderer-bound
+ * `useStructuredOutputSettings` selector hook — the slot inject face's reserved
+ * `hooks` compartment — and every write goes through the injected callbacks, so
+ * this component carries no subscription machinery and no service object. The
+ * host/remote write decision lives in `apply` (see `./index.ts`).
  */
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { StructuredOutputLocaleKey } from './locales.ts'
-import { SO_RPC_CHANNEL, SO_RPC_ENDPOINTS } from '../core/rpc.ts'
 
 export interface StructuredOutputSettingsValue {
   presets: Record<string, boolean>
@@ -17,14 +22,18 @@ export interface StructuredOutputSettingsSnapshot {
   readonly writable: boolean
 }
 
-/** Minimal face of the bound settings scope (the ui-settings package owns the concrete type).
- * Matches the current dsh `SettingsScope<T>` contract: the scope self-loads
- * when bound, so there is no `load()` method to call. */
+/** Observable source the inject face hands to the renderer's hooks compartment.
+ * Matches the dsh `HostObservable` pair (`getSnapshot` + `subscribe`). */
 export interface StructuredOutputScope {
   getSnapshot(): StructuredOutputSettingsSnapshot
   subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<void>
 }
+
+/** Selector hook the renderer binds from `hooks.structuredOutputSettings`. */
+export type StructuredOutputSettingsHook = <S>(
+  select: (snapshot: StructuredOutputSettingsSnapshot) => S,
+  equal?: (left: S, right: S) => boolean,
+) => S
 
 /** One row of the agentPreset.list response. */
 export interface StructuredOutputPreset {
@@ -35,23 +44,32 @@ export interface StructuredOutputPreset {
   readonly broken?: string
 }
 
+/** Inject face returned by `apply`; the renderer binds `hooks` to hooks props. */
 export interface StructuredOutputSettingsInjected {
-  readonly scope: StructuredOutputScope
+  readonly hooks: { readonly structuredOutputSettings: StructuredOutputScope }
   readonly loadPresets: () => Promise<readonly StructuredOutputPreset[]>
-  readonly rpc?: StructuredOutputRpc
+  readonly readRemoteSettings: () => Promise<StructuredOutputSettingsValue | undefined>
+  readonly setPresets: (presets: Record<string, boolean>) => Promise<StructuredOutputSettingsValue | undefined>
 }
 
+/** Component-side view of the inject face (hooks compartment already bound). */
+export type StructuredOutputSettingsProps = Partial<{
+  useStructuredOutputSettings: StructuredOutputSettingsHook
+  loadPresets: () => Promise<readonly StructuredOutputPreset[]>
+  readRemoteSettings: () => Promise<StructuredOutputSettingsValue | undefined>
+  setPresets: (presets: Record<string, boolean>) => Promise<StructuredOutputSettingsValue | undefined>
+}> & {
+  readonly close?: () => void
+  readonly t?: (key: StructuredOutputLocaleKey, vars?: { name: string }) => string
+}
+
+/** Minimal face of the authenticated connection channel used by the client half. */
 export interface StructuredOutputRpc {
   call(channel: string, endpoint: string, payload: unknown): Promise<{
     readonly ok: boolean
     readonly value?: unknown
     readonly error?: { readonly message?: string }
   }>
-}
-
-export type StructuredOutputSettingsProps = Partial<StructuredOutputSettingsInjected> & {
-  readonly close?: () => void
-  readonly t?: (key: StructuredOutputLocaleKey, vars?: { name: string }) => string
 }
 
 const STYLE: Record<string, CSSProperties> = {
@@ -88,6 +106,15 @@ const UNAVAILABLE_SNAPSHOT: StructuredOutputSettingsSnapshot = Object.freeze({
   writable: false,
 })
 
+/**
+ * Stand-in for a directly mounted component with no renderer-bound hook.
+ * @param select - projection over the absent settings snapshot.
+ * @returns the projection's value for the unavailable snapshot.
+ */
+function useAbsentSettings<S>(select: (snapshot: StructuredOutputSettingsSnapshot) => S): S {
+  return select(UNAVAILABLE_SNAPSHOT)
+}
+
 function translate(
   t: StructuredOutputSettingsProps['t'],
   key: StructuredOutputLocaleKey,
@@ -96,41 +123,47 @@ function translate(
   return t?.(key, vars) ?? key
 }
 
+/** A remote read triggered by the first render whose bound scope is unavailable. */
+type RemoteReadStatus = 'idle' | 'loading' | 'ready' | 'failed'
+
 /** Render one settings section listing per-preset visibility toggles. */
 export function StructuredOutputSettings({
-  scope, loadPresets, rpc, close, t,
+  useStructuredOutputSettings, loadPresets, readRemoteSettings, setPresets, close, t,
 }: StructuredOutputSettingsProps): ReactElement | null {
   void close
 
-  const snapshot = useSyncExternalStore(
-    (listener: () => void) => scope?.subscribe(listener) ?? (() => {}),
-    () => scope?.getSnapshot() ?? UNAVAILABLE_SNAPSHOT,
-  )
+  // The renderer binds this hook for every mounted contribution; the fallback
+  // keeps a directly mounted component (tests) renderable without one.
+  const useSettings = useStructuredOutputSettings ?? useAbsentSettings
+  const snapshot = useSettings(settings => settings)
 
-  const [rpcValue, setRpcValue] = useState<StructuredOutputSettingsValue | undefined>(undefined)
-  const [rpcStatus, setRpcStatus] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
+  const [remoteValue, setRemoteValue] = useState<StructuredOutputSettingsValue | undefined>(undefined)
+  const [remoteStatus, setRemoteStatus] = useState<RemoteReadStatus>('idle')
 
   useEffect(() => {
-    if (rpc === undefined || snapshot.status !== 'unavailable') return
+    // On loopback the bound settings scope is authoritative. In a non-loopback
+    // browser it reports 'unavailable', so the injected read becomes the
+    // effective settings snapshot.
+    if (readRemoteSettings === undefined || snapshot.status !== 'unavailable') return
     let stale = false
-    setRpcStatus('loading')
-    rpc.call(SO_RPC_CHANNEL, SO_RPC_ENDPOINTS.settingsGet, {})
-      .then((result) => {
+    setRemoteStatus('loading')
+    readRemoteSettings()
+      .then((value) => {
         if (stale) return
-        if (result.ok && result.value !== undefined) {
-          setRpcValue(result.value as StructuredOutputSettingsValue)
-          setRpcStatus('ready')
-        } else {
-          setRpcStatus('failed')
+        if (value === undefined) {
+          setRemoteStatus('failed')
+          return
         }
+        setRemoteValue(value)
+        setRemoteStatus('ready')
       })
       .catch(() => {
-        if (!stale) setRpcStatus('failed')
+        if (!stale) setRemoteStatus('failed')
       })
     return () => { stale = true }
-  }, [rpc, snapshot.status])
+  }, [readRemoteSettings, snapshot.status])
 
-  const [presets, setPresets] = useState<readonly StructuredOutputPreset[]>([])
+  const [presets, setPresetList] = useState<readonly StructuredOutputPreset[]>([])
   const [presetState, setPresetState] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
@@ -141,7 +174,7 @@ export function StructuredOutputSettings({
       .then(() => loadPresets())
       .then((entries) => {
         if (stale) return
-        setPresets(entries)
+        setPresetList(entries)
         setPresetState('ready')
       })
       .catch(() => {
@@ -150,40 +183,33 @@ export function StructuredOutputSettings({
     return () => { stale = true }
   }, [loadPresets])
 
-  // On loopback the bound settings scope is authoritative. In a non-loopback
-  // browser it reports 'unavailable', so the authenticated RPC channel becomes
-  // the effective settings snapshot.
   const settingsSnapshot = useMemo<StructuredOutputSettingsSnapshot>(() => {
     if (snapshot.status === 'ready') return snapshot
-    if (snapshot.status === 'unavailable' && rpcStatus === 'ready' && rpcValue !== undefined) {
-      return { status: 'ready', value: rpcValue, writable: true }
+    if (snapshot.status === 'unavailable' && remoteStatus === 'ready' && remoteValue !== undefined) {
+      return { status: 'ready', value: remoteValue, writable: true }
     }
-    if (snapshot.status === 'unavailable' && rpcStatus === 'loading') {
+    if (snapshot.status === 'unavailable' && remoteStatus === 'loading') {
       return { status: 'loading', writable: false }
     }
     return snapshot
-  }, [snapshot, rpcStatus, rpcValue])
+  }, [snapshot, remoteStatus, remoteValue])
 
   const enabled = useMemo(() => settingsSnapshot.value?.presets ?? {}, [settingsSnapshot.value])
 
-  if (scope === undefined || loadPresets === undefined) return null
+  if (loadPresets === undefined) return null
 
   const setVisible = (presetId: string, visible: boolean): void => {
+    if (setPresets === undefined) return
     const next = { ...enabled, [presetId]: visible }
-    if (snapshot.status === 'ready') {
-      void scope.set('presets', next)
-      return
-    }
-    if (rpcStatus === 'ready' && rpc !== undefined) {
-      rpc.call(SO_RPC_CHANNEL, SO_RPC_ENDPOINTS.settingsSet, { presets: next })
-        .then((result) => {
-          if (result.ok && result.value !== undefined) {
-            setRpcValue(result.value as StructuredOutputSettingsValue)
-            setRpcStatus('ready')
-          }
-        })
-        .catch(() => {})
-    }
+    void Promise.resolve(setPresets(next))
+      .then((value) => {
+        // A host-scope write republishes through the bound hook; only the
+        // remote route answers with the accepted value.
+        if (value === undefined) return
+        setRemoteValue(value)
+        setRemoteStatus('ready')
+      })
+      .catch(() => {})
   }
 
   return (
