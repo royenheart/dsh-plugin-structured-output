@@ -50,6 +50,11 @@ function fakeScope(snapshot, onSet) {
   }
 }
 
+/** Stand-in for the renderer-bound selector hook the slot inject face declares. */
+function hookFor(scope) {
+  return (select) => select(scope.getSnapshot())
+}
+
 async function mount(props) {
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -83,7 +88,7 @@ test('missing inject props render nothing', async () => {
 
 test('loading and unavailable copy is the settings UX, not a spinner hole', async () => {
   const loading = await mount({
-    scope: fakeScope({ status: 'loading', writable: false }),
+    useStructuredOutputSettings: hookFor(fakeScope({ status: 'loading', writable: false })),
     loadPresets: () => new Promise(() => {}),
     t,
   })
@@ -92,7 +97,7 @@ test('loading and unavailable copy is the settings UX, not a spinner hole', asyn
   await loading.unmount()
 
   const down = await mount({
-    scope: fakeScope({ status: 'unavailable', writable: false }),
+    useStructuredOutputSettings: hookFor(fakeScope({ status: 'unavailable', writable: false })),
     loadPresets: async () => { throw new Error('offline') },
     t,
   })
@@ -108,15 +113,20 @@ test('ready list shows default/broken badges, disables broken rows, and persists
     status: 'ready',
     writable: true,
     value: { presets: { standard: true } },
-  }, (field, value) => { writes.push({ field, value }) })
+  })
 
   const view = await mount({
-    scope,
+    useStructuredOutputSettings: hookFor(scope),
     loadPresets: async () => [
       { id: 'standard', isDefault: true, name: 'Standard', description: 'default mode' },
       { id: 'broken', isDefault: false, name: 'Broken', broken: 'missing bundle' },
       { id: 'code', isDefault: false, name: 'Code' },
     ],
+    setPresets: async (presets) => {
+      writes.push(presets)
+      await scope.set('presets', presets)
+      return undefined
+    },
     t,
   })
   await act(async () => { await Promise.resolve() })
@@ -141,9 +151,8 @@ test('ready list shows default/broken badges, disables broken rows, and persists
     boxes[2].click()
   })
   assert.equal(writes.length, 1)
-  assert.equal(writes[0].field, 'presets')
-  assert.equal(writes[0].value.code, true)
-  assert.equal(writes[0].value.standard, true)
+  assert.equal(writes[0].code, true)
+  assert.equal(writes[0].standard, true)
   await view.unmount()
 })
 
@@ -204,6 +213,16 @@ class MockSettingsScope extends Service {
   }
 }
 
+/** Non-loopback page: the bound scope is memory-mode and reports 'unavailable'. */
+class MockUnavailableSettingsScope extends Service {
+  constructor(ctx) {
+    super(ctx, 'settingsScope')
+  }
+  bind() {
+    return fakeScope({ status: 'unavailable', writable: false })
+  }
+}
+
 class MockConnection extends Service {
   constructor(ctx) {
     super(ctx, 'connection')
@@ -228,8 +247,11 @@ test('client apply registers the 结构化输出工具 settings section', async 
   assert.equal(registration.options.order, 45)
   assert.equal(registration.options.label(), '结构化输出工具')
   assert.equal(registration.Component, StructuredOutputSettings)
+  const injectFace = registration.options.inject()
+  assert.equal(typeof injectFace.hooks.structuredOutputSettings.getSnapshot, 'function')
+  assert.equal(typeof injectFace.hooks.structuredOutputSettings.subscribe, 'function')
   assert.deepEqual(
-    await registration.options.inject().loadPresets(),
+    await injectFace.loadPresets(),
     [{ id: 'standard', isDefault: true }],
   )
 
@@ -242,26 +264,17 @@ test('client apply registers the 结构化输出工具 settings section', async 
 
 test('remote fallback reads and writes through the authenticated RPC channel', async () => {
   const calls = []
-  const rpc = {
-    call: async (channel, endpoint, payload) => {
-      calls.push({ channel, endpoint, payload })
-      if (endpoint === 'settings/get') {
-        return { ok: true, value: { presets: { standard: true } } }
-      }
-      if (endpoint === 'settings/set') {
-        return { ok: true, value: { presets: payload.presets } }
-      }
-      return { ok: false, error: { message: 'bad endpoint' } }
-    },
-  }
-
   const view = await mount({
-    scope: fakeScope({ status: 'unavailable', writable: false }),
+    useStructuredOutputSettings: hookFor(fakeScope({ status: 'unavailable', writable: false })),
     loadPresets: async () => [
       { id: 'standard', isDefault: true, name: 'Standard' },
       { id: 'code', isDefault: false, name: 'Code' },
     ],
-    rpc,
+    readRemoteSettings: async () => ({ presets: { standard: true } }),
+    setPresets: async (presets) => {
+      calls.push(presets)
+      return { presets }
+    },
     t,
   })
   await act(async () => { await Promise.resolve() })
@@ -275,11 +288,62 @@ test('remote fallback reads and writes through the authenticated RPC channel', a
   assert.equal(boxes[0].disabled, false)
 
   await act(async () => { boxes[1].click() })
-  assert.ok(calls.some(call => call.channel === '/structured-output' && call.endpoint === 'settings/set'))
-  const setCall = calls.find(call => call.endpoint === 'settings/set')
-  assert.equal(setCall.payload.presets.code, true)
-  assert.equal(setCall.payload.presets.standard, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].code, true)
+  assert.equal(calls[0].standard, true)
   await view.unmount()
+})
+
+test('client apply routes remote reads and writes through the /structured-output channel', async () => {
+  const rpcCalls = []
+  class ChannelConnection extends Service {
+    constructor(ctx) {
+      super(ctx, 'connection')
+      this.rpc = {
+        call: async (channel, endpoint, payload) => {
+          rpcCalls.push({ channel, endpoint, payload })
+          if (endpoint === 'settings/get') return { ok: true, value: { presets: { standard: true } } }
+          if (endpoint === 'settings/set') return { ok: true, value: { presets: payload.presets } }
+          return { ok: false, error: { message: 'bad endpoint' } }
+        },
+      }
+    }
+  }
+
+  const ctx = new Context()
+  await ctx.plugin(MockSlots)
+  await ctx.plugin(MockLocale)
+  await ctx.plugin(MockRemote)
+  await ctx.plugin(MockAgentPresetsRemote)
+  await ctx.plugin(MockSettingsScope)
+  await ctx.plugin(ChannelConnection)
+  const client = await import('../src/client/index.ts')
+  await ctx.plugin(client)
+
+  // The bound scope answers 'ready' on loopback, so writes stay scope-local.
+  const injectFace = ctx.get('slots').registrations[0].options.inject()
+  assert.equal(await injectFace.setPresets({ standard: true }), undefined)
+  assert.equal(rpcCalls.length, 0)
+
+  const isolated = new Context()
+  await isolated.plugin(MockSlots)
+  await isolated.plugin(MockLocale)
+  await isolated.plugin(MockRemote)
+  await isolated.plugin(MockAgentPresetsRemote)
+  await isolated.plugin(MockUnavailableSettingsScope)
+  await isolated.plugin(ChannelConnection)
+  await isolated.plugin(client)
+  const remoteFace = isolated.get('slots').registrations[0].options.inject()
+  assert.deepEqual(await remoteFace.readRemoteSettings(), { presets: { standard: true } })
+  assert.deepEqual(await remoteFace.setPresets({ standard: true, code: false }), {
+    presets: { standard: true, code: false },
+  })
+  assert.deepEqual(
+    rpcCalls.map(call => [call.channel, call.endpoint]),
+    [['/structured-output', 'settings/get'], ['/structured-output', 'settings/set']],
+  )
+  await ctx.fiber.dispose()
+  await isolated.fiber.dispose()
 })
 
 function hostText(host) {
